@@ -75,6 +75,24 @@ public class IdentityBackendClient {
         }
     }
 
+    public List<Long> findActiveCustomerUserIds() {
+        try {
+            Map<String, List<Long>> response = restTemplate.exchange(
+                    identityBackendUrl + "/api/v1/internal/users/active-customer-ids",
+                    HttpMethod.GET,
+                    null,
+                    new ParameterizedTypeReference<Map<String, List<Long>>>() {})
+                    .getBody();
+            if (response == null || response.get("userIds") == null) {
+                return Collections.emptyList();
+            }
+            return response.get("userIds");
+        } catch (Exception e) {
+            log.error("Failed to fetch active customer user ids: {}", e.getMessage());
+            throw e;
+        }
+    }
+
     @Data
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class WelcomeBonusStatusResponse {

@@ -753,6 +753,21 @@ public class CoinWalletServiceImpl implements CoinWalletService {
     }
 
     @Override
+    public BulkCoinAdjustResponse bulkAdjustAllCoins(BulkCoinAdjustAllRequest request) {
+        List<Long> userIds = identityBackendClient.findActiveCustomerUserIds();
+        BulkCoinAdjustRequest bulkRequest = BulkCoinAdjustRequest.builder()
+                .userIds(userIds)
+                .amount(request.getAmount())
+                .type(request.getType() != null ? request.getType() : CoinTransactionType.CAMPAIGN_BONUS)
+                .description(request.getDescription())
+                .notificationTitle(request.getNotificationTitle())
+                .notificationBody(request.getNotificationBody())
+                .sendNotification(request.getSendNotification())
+                .build();
+        return bulkAdjustCoins(bulkRequest);
+    }
+
+    @Override
     @Transactional(readOnly = true)
     public Page<CoinTransactionResponse> getAllTransactionsForAdmin(Pageable pageable) {
         return transactionRepository.findAllByOrderByCreatedDateDesc(pageable)

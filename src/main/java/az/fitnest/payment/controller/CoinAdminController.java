@@ -92,6 +92,15 @@ public class CoinAdminController {
         return ResponseEntity.ok(coinWalletService.bulkAdjustCoins(request));
     }
 
+    @PostMapping("/api/v1/admin/coins/bulk-adjust-all")
+    @Operation(
+            summary = "Bütün müştərilərə Coin göndər",
+            description = "ROLE_USER və silinməmiş bütün istifadəçilərə eyni Coin məbləğini göndərir. İstifadəçi ID siyahısı tələb olunmur."
+    )
+    public ResponseEntity<BulkCoinAdjustResponse> bulkAdjustAllCoins(@Valid @RequestBody BulkCoinAdjustAllRequest request) {
+        return ResponseEntity.ok(coinWalletService.bulkAdjustAllCoins(request));
+    }
+
     @PostMapping("/api/v1/admin/coins/bulk-welcome-bonus")
     @Operation(summary = "Mövcud userlər üçün xoş gəldin bonusu", description = "isWelcomeBonusReceived=false olan bütün istifadəçilərə admin ayarlarındakı qeydiyyat bonusunu verir")
     public ResponseEntity<BulkCoinAdjustResponse> bulkWelcomeBonus(@Valid @RequestBody BulkWelcomeBonusRequest request) {
