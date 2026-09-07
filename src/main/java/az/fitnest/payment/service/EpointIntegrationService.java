@@ -723,7 +723,10 @@ public class EpointIntegrationService {
         }
 
         payment.setStatus(newStatus);
-        copyIfPresent(response.transaction(), payment::setTransactionId);
+        if (response.transaction() != null && !response.transaction().isBlank()) {
+            payment.setTransactionId(
+                    EpointTransactionIds.preferredStoredId(payment.getTransactionId(), response.transaction()));
+        }
         copyIfPresent(response.bankTransaction(), payment::setBankTransaction);
         copyIfPresent(response.rrn(), payment::setRrn);
         if (response.cardMask() != null && !response.cardMask().isBlank()) {

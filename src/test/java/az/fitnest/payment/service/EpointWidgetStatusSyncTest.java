@@ -122,4 +122,27 @@ class EpointWidgetStatusSyncTest {
                 eq(widgetPayment), eq(27L), any());
         verify(paymentRepository, never()).findByOrderId(any());
     }
+
+    @Test
+    void getStatusKeepsTwPrefixWhenEpointReportsTeForSameToken() {
+        widgetPayment.setTransactionId("tw022241588");
+        when(paymentRepository.findByOrderId("3874721e-3adb-4761-bf85-6b32c5f1990a"))
+                .thenReturn(Optional.of(widgetPayment));
+        when(epointService.getStatus("tw022241588")).thenReturn(
+                EpointResponse.builder()
+                        .status("success")
+                        .transaction("te022241588")
+                        .orderId("3874721e-3adb-4761-bf85-6b32c5f1990a")
+                        .amount(0.10)
+                        .rrn("625020306717")
+                        .cardMask("************0239")
+                        .build());
+        when(paymentRepository.save(any(Payment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        integrationService.getStatus("3874721e-3adb-4761-bf85-6b32c5f1990a");
+
+        assertEquals("SUCCESS", widgetPayment.getStatus());
+        assertEquals("tw022241588", widgetPayment.getTransactionId());
+        assertEquals("625020306717", widgetPayment.getRrn());
+    }
 }

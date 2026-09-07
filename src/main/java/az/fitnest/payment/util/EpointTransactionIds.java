@@ -6,7 +6,9 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 
 /**
  * Epoint transaction ids: {@code te} (redirect checkout) and {@code tw} (widget / Apple Pay).
@@ -26,6 +28,172 @@ public final class EpointTransactionIds {
             return token == null ? null : token.trim();
         }
         return "tw" + pad(digits, 9);
+    }
+
+    /**
+     * When Epoint reports the same numeric token with a different prefix ({@code te} vs {@code tw})
+     * or padding, keep the prefix we already stored and canonicalize to 9 digits. Otherwise the
+     * client-held widget id ({@code tw022241588}) no longer matches history lookup after callback.
+     */
+    public static String preferredStoredId(String existing, String incoming) {
+        if (incoming == null || incoming.isBlank()) {
+            return existing;
+        }
+        String inc = incoming.trim();
+        if (existing == null || existing.isBlank()) {
+            return inc;
+        }
+        if (existing.equals(inc)) {
+            return existing;
+        }
+        String existingDigits = digitsOf(existing);
+        String incomingDigits = digitsOf(inc);
+        if (existingDigits.isEmpty() || incomingDigits.isEmpty()) {
+            return inc;
+        }
+        try {
+            if (Long.parseLong(existingDigits) != Long.parseLong(incomingDigits)) {
+                return inc;
+            }
+        } catch (NumberFormatException e) {
+            return inc;
+        }
+        String prefix = prefixOf(existing);
+        if (prefix.isEmpty()) {
+            prefix = prefixOf(inc);
+        }
+        if (prefix.isEmpty()) {
+            return inc;
+        }
+        return prefix + pad(incomingDigits, 9);
+    }
+
+    static String prefixOf(String raw) {
+        if (raw == null || raw.length() < 2) {
+            return "";
+        }
+        String head = raw.substring(0, 2).toLowerCase(Locale.ROOT);
+        if ("tw".equals(head) || "te".equals(head)) {
+            return head;
+        }
+        return "";
+    }
+
+    public static boolean sameNumericToken(String left, String right) {
+        String a = digitsOf(left);
+        String b = digitsOf(right);
+        if (a.isEmpty() || b.isEmpty()) {
+            return false;
+        }
+        try {
+            return Long.parseLong(a) == Long.parseLong(b);
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    public static boolean isWidgetLike(String type) {
+        if (type == null || type.isBlank()) {
+            return false;
+        }
+        String t = type.toUpperCase(Locale.ROOT);
+        return "WIDGET_PAYMENT".equals(t)
+                || "APPLE_PAY".equals(t)
+                || "GOOGLE_PAY".equals(t);
+    }
+
+    /**
+     * Padding variants of the same prefix are the same Epoint payment. {@code tw}↔{@code te} is
+     * only an alias when the row is a widget/Apple Pay/Google Pay payment — a card {@code te}
+     * checkout with the same digits is a different payment and must not be returned.
+     */
+    public static boolean isAliasCompatible(String requestedId, String storedId, String paymentType) {
+        String requestedPrefix = prefixOf(requestedId);
+        String storedPrefix = prefixOf(storedId);
+        if (requestedPrefix.isEmpty() || storedPrefix.isEmpty() || requestedPrefix.equals(storedPrefix)) {
+            return true;
+        }
+        return isWidgetLike(paymentType);
+    }
+
+    /**
+     * Picks at most one row for a history lookup. Returns empty when two different payments share
+     * the same numeric token (for example card {@code te} and widget {@code tw}) and neither is an
+     * unambiguous alias of the requested id.
+     */
+    public static <T> Optional<T> selectAliasMatch(
+            String requestedId,
+            List<T> matches,
+            Long requiredUserId,
+            Function<T, String> transactionId,
+            Function<T, String> type,
+            Function<T, Long> userId) {
+        if (requestedId == null || requestedId.isBlank() || matches == null || matches.isEmpty()) {
+            return Optional.empty();
+        }
+        String requested = requestedId.trim();
+        List<T> pool = new ArrayList<>();
+        for (T match : matches) {
+            if (match == null) {
+                continue;
+            }
+            String stored = transactionId.apply(match);
+            if (stored == null || !sameNumericToken(requested, stored)) {
+                continue;
+            }
+            if (requiredUserId != null && !requiredUserId.equals(userId.apply(match))) {
+                continue;
+            }
+            if (!isAliasCompatible(requested, stored, type.apply(match))) {
+                continue;
+            }
+            pool.add(match);
+        }
+        if (pool.isEmpty()) {
+            return Optional.empty();
+        }
+        if (pool.size() == 1) {
+            return Optional.of(pool.get(0));
+        }
+
+        String requestedPrefix = prefixOf(requested);
+        List<T> samePrefix = new ArrayList<>();
+        for (T match : pool) {
+            if (requestedPrefix.equals(prefixOf(transactionId.apply(match)))) {
+                samePrefix.add(match);
+            }
+        }
+        List<T> ranked = !samePrefix.isEmpty() ? samePrefix : pool;
+        if (ranked.size() == 1) {
+            return Optional.of(ranked.get(0));
+        }
+
+        String canonical = canonicalForm(requested);
+        if (canonical != null) {
+            List<T> canon = new ArrayList<>();
+            for (T match : ranked) {
+                if (canonical.equals(transactionId.apply(match))) {
+                    canon.add(match);
+                }
+            }
+            if (canon.size() == 1) {
+                return Optional.of(canon.get(0));
+            }
+        }
+        return Optional.empty();
+    }
+
+    static String canonicalForm(String requested) {
+        String prefix = prefixOf(requested);
+        String digits = digitsOf(requested);
+        if (prefix.isEmpty() || digits.isEmpty()) {
+            return null;
+        }
+        try {
+            return prefix + pad(digits, 9);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /**

@@ -11,6 +11,7 @@ import az.fitnest.payment.repository.PaymentRepository;
 import az.fitnest.payment.repository.UserCardRepository;
 import az.fitnest.payment.util.CardBrandDetector;
 import az.fitnest.payment.util.CardMaskUtil;
+import az.fitnest.payment.util.EpointTransactionIds;
 import az.fitnest.payment.util.PaymentTypeLabels;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -185,8 +186,7 @@ public class UserPaymentService {
 
     public PaymentResponse getPaymentByTransactionId(String transactionId, Long userId) {
         log.info("Fetching payment with transaction id: {} for user: {}", transactionId, userId);
-        Payment payment = paymentRepository.findByTransactionId(transactionId)
-                .or(() -> paymentRepository.findByOrderId(transactionId))
+        Payment payment = findPaymentByTransactionOrOrderId(transactionId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Payment not found with transaction/order id: " + transactionId));
         verifyOwnership(payment, userId);
         payment = syncPendingProviderStatus(payment);
@@ -305,9 +305,53 @@ public class UserPaymentService {
 
     public PaymentResponse getPaymentByTransactionIdAdmin(String transactionId) {
         log.info("Admin: fetching payment with transaction id: {}", transactionId);
-        return paymentRepository.findByTransactionId(transactionId)
+        return findPaymentByTransactionOrOrderId(transactionId, null)
                 .map(payment -> mapToPaymentResponse(payment, "AZ"))
                 .orElseThrow(() -> new ResourceNotFoundException("Payment not found with transaction id: " + transactionId));
+    }
+
+    /**
+     * Resolves an Epoint history id without mixing up two payments that happen to share digits.
+     * Exact {@code transaction_id} / {@code order_id} always win. Aliases ({@code tw}↔{@code te},
+     * 9 vs 10 digit padding) are applied only when {@link EpointTransactionIds#selectAliasMatch}
+     * can pick a single compatible row for this user.
+     */
+    private java.util.Optional<Payment> findPaymentByTransactionOrOrderId(String id, Long userId) {
+        if (id == null || id.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        java.util.Optional<Payment> exact = paymentRepository.findByTransactionId(id);
+        if (exact.isPresent()) {
+            return exact;
+        }
+        java.util.Optional<Payment> byOrder = paymentRepository.findByOrderId(id);
+        if (byOrder.isPresent()) {
+            return byOrder;
+        }
+
+        java.util.List<String> candidates = EpointTransactionIds.lookupCandidates(id);
+        if (candidates.isEmpty()) {
+            return java.util.Optional.empty();
+        }
+        java.util.List<Payment> found = paymentRepository.findByTransactionIdIn(candidates);
+        if (found == null || found.isEmpty()) {
+            return java.util.Optional.empty();
+        }
+        java.util.Optional<Payment> alias = EpointTransactionIds.selectAliasMatch(
+                id,
+                found,
+                userId,
+                Payment::getTransactionId,
+                Payment::getType,
+                Payment::getUserId);
+        alias.ifPresent(payment -> log.info(
+                "[History] Matched payment id={} storedTx={} (requested={})",
+                payment.getId(), payment.getTransactionId(), id));
+        if (alias.isEmpty() && found != null && found.size() > 1) {
+            log.warn("[History] Ambiguous Epoint token for requested={}, candidates={}",
+                    id, found.stream().map(Payment::getTransactionId).toList());
+        }
+        return alias;
     }
 
     public PaginatedResponse<PaymentResponse> getUserPaymentHistory(Long userId, Pageable pageable, Integer fromMonth) {
