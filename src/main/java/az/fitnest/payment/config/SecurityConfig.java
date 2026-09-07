@@ -45,6 +45,7 @@ public class SecurityConfig {
                         .requestMatchers("/payment/result").permitAll()
                         .requestMatchers("/payment/callback").permitAll()
                         .requestMatchers("/payment/epoint/callback").permitAll()
+                        .requestMatchers("/payment/payment/status/**").permitAll()
                         .requestMatchers("/payment/redirect/**").permitAll()
                         // ABB (Azericard) endpoints — secured via RSA P_SIGN, not JWT
                         .requestMatchers("/payment/abb/callback").permitAll()

@@ -177,6 +177,7 @@ public class UserPaymentService {
         Payment payment = paymentRepository.findByOrderId(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Payment not found with order id: " + orderId));
         verifyOwnership(payment, userId);
+        payment = syncPendingProviderStatus(payment);
         return mapToPaymentResponse(payment, resolveUserLanguage());
     }
 
@@ -186,6 +187,7 @@ public class UserPaymentService {
                 .or(() -> paymentRepository.findByOrderId(transactionId))
                 .orElseThrow(() -> new ResourceNotFoundException("Payment not found with transaction/order id: " + transactionId));
         verifyOwnership(payment, userId);
+        payment = syncPendingProviderStatus(payment);
         return mapToPaymentResponse(payment, resolveUserLanguage());
     }
 
@@ -194,34 +196,8 @@ public class UserPaymentService {
         Payment payment = paymentRepository.findByOrderId(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Payment not found with order id: " + orderId));
         verifyOwnership(payment, userId);
-        
+        payment = syncPendingProviderStatus(payment);
         String status = payment.getStatus() != null ? payment.getStatus().toUpperCase() : "PENDING";
-        
-        // If status is pending, actively query Epoint to sync status
-        if ("PENDING".equals(status) || "PENDING_USER_ACTION".equals(status) || "PENDING_3DS".equals(status) || "NEW".equals(status)) {
-            try {
-                boolean isAbb = "ABB".equalsIgnoreCase(payment.getProvider())
-                        || (payment.getType() != null && payment.getType().startsWith("ABB"));
-                boolean isBob = "BOB".equalsIgnoreCase(payment.getProvider())
-                        || "BANK_OF_BAKU".equalsIgnoreCase(payment.getProvider())
-                        || (payment.getType() != null && payment.getType().startsWith("BOB"));
-                if (isAbb) {
-                    log.info("[StatusSync] Actively querying ABB status for orderId: {}", orderId);
-                    abbIntegrationService.getTransactionStatus(orderId, "1");
-                } else if (isBob && bobIntegrationService != null) {
-                    log.info("[StatusSync] Actively querying BOB status for orderId: {}", orderId);
-                    bobIntegrationService.checkPaymentStatus(orderId);
-                } else {
-                    log.info("[StatusSync] Actively querying Epoint status for orderId: {}", orderId);
-                    integrationService.getStatus(orderId);
-                }
-                payment = paymentRepository.findByOrderId(orderId).orElse(payment);
-                status = payment.getStatus() != null ? payment.getStatus().toUpperCase() : "PENDING";
-                log.info("[StatusSync] Synchronized status: {} for orderId: {}", status, orderId);
-            } catch (Exception e) {
-                log.error("[StatusSync] Failed to actively sync status for orderId: {}", orderId, e);
-            }
-        }
         
         return switch (status) {
             case "SUCCESS" -> "SUCCESS";
@@ -230,6 +206,45 @@ public class UserPaymentService {
             case "REVERSED", "REFUNDED", "RETURNED", "CANCELLED" -> "CANCELLED";
             default -> "PENDING";
         };
+    }
+
+    private Payment syncPendingProviderStatus(Payment payment) {
+        if (payment == null) {
+            return payment;
+        }
+        String status = payment.getStatus() != null ? payment.getStatus().toUpperCase() : "PENDING";
+        if (!"PENDING".equals(status)
+                && !"PENDING_USER_ACTION".equals(status)
+                && !"PENDING_3DS".equals(status)
+                && !"NEW".equals(status)) {
+            return payment;
+        }
+        String lookupId = payment.getOrderId() != null ? payment.getOrderId() : payment.getTransactionId();
+        try {
+            boolean isAbb = "ABB".equalsIgnoreCase(payment.getProvider())
+                    || (payment.getType() != null && payment.getType().startsWith("ABB"));
+            boolean isBob = "BOB".equalsIgnoreCase(payment.getProvider())
+                    || "BANK_OF_BAKU".equalsIgnoreCase(payment.getProvider())
+                    || (payment.getType() != null && payment.getType().startsWith("BOB"));
+            if (isAbb) {
+                log.info("[StatusSync] Actively querying ABB status for orderId: {}", lookupId);
+                abbIntegrationService.getTransactionStatus(lookupId, "1");
+            } else if (isBob && bobIntegrationService != null) {
+                log.info("[StatusSync] Actively querying BOB status for orderId: {}", lookupId);
+                bobIntegrationService.checkPaymentStatus(lookupId);
+            } else {
+                log.info("[StatusSync] Actively querying Epoint status for id: {}", lookupId);
+                integrationService.getStatus(lookupId);
+            }
+            Payment refreshed = payment.getId() != null
+                    ? paymentRepository.findById(payment.getId()).orElse(payment)
+                    : payment;
+            log.info("[StatusSync] Synchronized status: {} for id: {}", refreshed.getStatus(), lookupId);
+            return refreshed;
+        } catch (Exception e) {
+            log.error("[StatusSync] Failed to actively sync status for id: {}", lookupId, e);
+            return payment;
+        }
     }
 
     public List<PaymentResponse> getAllPayments() {

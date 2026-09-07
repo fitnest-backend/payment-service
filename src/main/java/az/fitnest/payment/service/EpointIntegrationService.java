@@ -214,9 +214,12 @@ public class EpointIntegrationService {
         subscriptionCheckoutService.requireOneMonthForAutoPay(quote, autoPaymentEnabled);
         validatePaymentRequest(quote.chargeAmountAzn(), quote.currency());
         String orderId = java.util.UUID.randomUUID().toString();
-        String description = Boolean.TRUE.equals(autoPaymentEnabled)
-                ? "Fitness package monthly payment"
-                : "Fitness package payment";
+        String description = PaymentPackageRef.appendToDescription(
+                Boolean.TRUE.equals(autoPaymentEnabled)
+                        ? "Fitness package monthly payment"
+                        : "Fitness package payment",
+                packageId,
+                optionId);
         EpointPaymentRequest request = EpointPaymentRequest.builder()
                 .currency(quote.currency())
                 .amount(quote.chargeAmountAzn())
@@ -231,6 +234,7 @@ public class EpointIntegrationService {
         EpointResponse response = cardRegistrationWithPay(userId, request);
         paymentRepository.findByOrderId(orderId).ifPresent(payment -> {
             payment.setCoinsUsed(quote.coinsUsed());
+            payment.setDescription(description);
             paymentRepository.save(payment);
         });
         return response;
@@ -921,6 +925,12 @@ public class EpointIntegrationService {
     }
 
     public String getSuccessRedirectUrl(String id) {
+        try {
+            log.info("[Redirection] Syncing Epoint status before success redirect for id={}", id);
+            getStatus(id);
+        } catch (Exception e) {
+            log.warn("[Redirection] Failed to sync Epoint status before success redirect for id={}", id, e);
+        }
         String redisKey = "payment-redirect:success:" + id;
         String targetUrl = redisTemplate.opsForValue().get(redisKey);
         if (targetUrl != null) {
@@ -1046,7 +1056,10 @@ public class EpointIntegrationService {
         subscriptionCheckoutService.requireOneMonthForAutoPay(quote, autoPaymentEnabled);
         validatePaymentRequest(quote.chargeAmountAzn(), quote.currency());
         String orderId = java.util.UUID.randomUUID().toString();
-        String description = Boolean.TRUE.equals(autoPaymentEnabled) ? "Fitness package monthly payment" : "Fitness package payment";
+        String description = PaymentPackageRef.appendToDescription(
+                Boolean.TRUE.equals(autoPaymentEnabled) ? "Fitness package monthly payment" : "Fitness package payment",
+                packageId,
+                optionId);
         EpointPaymentRequest request = EpointPaymentRequest.builder()
                 .currency(quote.currency())
                 .amount(quote.chargeAmountAzn())
@@ -1061,6 +1074,7 @@ public class EpointIntegrationService {
         EpointResponse response = initiatePayment(request, userId);
         paymentRepository.findByOrderId(orderId).ifPresent(payment -> {
             payment.setCoinsUsed(quote.coinsUsed());
+            payment.setDescription(description);
             paymentRepository.save(payment);
         });
         return response;

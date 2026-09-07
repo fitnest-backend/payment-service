@@ -153,13 +153,16 @@ app:
     cleanup-cron: ${APP_OUTBOX_CLEANUP_CRON:0 30 * * * *}
 
 # Epoint Configuration
+# URLs come from Vault (EPOINT_RESULT_URL / EPOINT_SUCCESS_REDIRECT_URL /
+# EPOINT_ERROR_REDIRECT_URL). Do not default result-url to api.fitnest.az —
+# that placeholder is resolved before Vault and then shadows the Vault key.
 epoint:
   public-key: ${EPOINT_PUBLIC_KEY:}
   private-key: ${EPOINT_PRIVATE_KEY:}
   base-url: ${EPOINT_BASE_URL:https://epoint.az/api/1}
-  result-url: ${EPOINT_RESULT_URL:https://api.fitnest.az/payment/callback}
-  success-redirect-url: ${EPOINT_SUCCESS_REDIRECT_URL:https://fitnest.az/payment/success}
-  error-redirect-url: ${EPOINT_ERROR_REDIRECT_URL:https://fitnest.az/payment/error}
+  result-url: ${EPOINT_RESULT_URL:}
+  success-redirect-url: ${EPOINT_SUCCESS_REDIRECT_URL:}
+  error-redirect-url: ${EPOINT_ERROR_REDIRECT_URL:}
 
 # ABB (Azericard) E-Commerce Gateway Configuration
 abb:
