@@ -592,22 +592,44 @@ public class AbbIntegrationService {
      * Uğurlu ödənişdən sonra yönləndiriləcək mütləq local uğur endpoint-i.
      */
     public String getAbsoluteLocalSuccessRedirectUrl() {
-        String callback = abbProperties.getCallbackUrl();
-        if (callback != null && callback.endsWith("/callback")) {
-            return callback.replace("/callback", "/redirect/success");
-        }
-        return "https://api.fitnest.az/payment/abb/redirect/success";
+        return getAbsoluteLocalSuccessRedirectUrl(null);
+    }
+
+    public String getAbsoluteLocalSuccessRedirectUrl(String orderId) {
+        return localRedirectPath("success", orderId);
     }
 
     /**
      * Uğursuz ödənişdən sonra yönləndiriləcək mütləq local xəta endpoint-i.
      */
     public String getAbsoluteLocalErrorRedirectUrl() {
+        return getAbsoluteLocalErrorRedirectUrl(null);
+    }
+
+    public String getAbsoluteLocalErrorRedirectUrl(String orderId) {
+        return localRedirectPath("error", orderId);
+    }
+
+    private String localRedirectPath(String kind, String orderId) {
         String callback = abbProperties.getCallbackUrl();
-        if (callback != null && callback.endsWith("/callback")) {
-            return callback.replace("/callback", "/redirect/error");
+        String base = null;
+        if (callback != null && !callback.isBlank()) {
+            if (callback.endsWith("/callback")) {
+                base = callback.substring(0, callback.length() - "/callback".length());
+            } else if (callback.contains("/payment/abb/")) {
+                int idx = callback.indexOf("/payment/abb/");
+                base = callback.substring(0, idx) + "/payment/abb";
+            }
         }
-        return "https://api.fitnest.az/payment/abb/redirect/error";
+        if (base == null || base.isBlank()) {
+            log.error("[ABB] Missing ABB_CALLBACK_URL; cannot build local {} redirect", kind);
+            return "error".equals(kind) ? getErrorRedirectUrl() : getSuccessRedirectUrl();
+        }
+        String url = base + "/redirect/" + kind;
+        if (orderId != null && !orderId.isBlank()) {
+            url += "/" + orderId;
+        }
+        return url;
     }
 
 

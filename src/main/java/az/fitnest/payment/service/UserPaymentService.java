@@ -41,6 +41,8 @@ public class UserPaymentService {
     private final UserDisplayNameResolver userDisplayNameResolver;
     @Autowired(required = false)
     private BobIntegrationService bobIntegrationService;
+    @Autowired(required = false)
+    private BnplIntegrationService bnplIntegrationService;
     @Autowired
     private MessageSource messageSource;
 
@@ -221,12 +223,17 @@ public class UserPaymentService {
         }
         String lookupId = payment.getOrderId() != null ? payment.getOrderId() : payment.getTransactionId();
         try {
-            boolean isAbb = "ABB".equalsIgnoreCase(payment.getProvider())
-                    || (payment.getType() != null && payment.getType().startsWith("ABB"));
+            boolean isBnpl = "ABB_BNPL".equalsIgnoreCase(payment.getProvider())
+                    || (payment.getType() != null && payment.getType().contains("BNPL"));
+            boolean isAbb = !isBnpl && ("ABB".equalsIgnoreCase(payment.getProvider())
+                    || (payment.getType() != null && payment.getType().startsWith("ABB")));
             boolean isBob = "BOB".equalsIgnoreCase(payment.getProvider())
                     || "BANK_OF_BAKU".equalsIgnoreCase(payment.getProvider())
                     || (payment.getType() != null && payment.getType().startsWith("BOB"));
-            if (isAbb) {
+            if (isBnpl && bnplIntegrationService != null) {
+                log.info("[StatusSync] Actively querying ABB BNPL status for id: {}", lookupId);
+                bnplIntegrationService.refreshStatus(lookupId);
+            } else if (isAbb) {
                 log.info("[StatusSync] Actively querying ABB status for orderId: {}", lookupId);
                 abbIntegrationService.getTransactionStatus(lookupId, "1");
             } else if (isBob && bobIntegrationService != null) {

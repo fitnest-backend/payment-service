@@ -29,8 +29,8 @@ import java.net.URI;
  *   <li>{@code POST /payment/abb/init}         — Ödəniş başlatma (taksitsiz)</li>
  *   <li>{@code POST /payment/abb/installment}  — Taksit ödənişi başlatma</li>
  *   <li>{@code POST /payment/abb/callback}     — Azericard BACKREF callback</li>
- *   <li>{@code GET  /payment/abb/redirect/success} — Uğurlu ödəniş yönləndirmə</li>
- *   <li>{@code GET  /payment/abb/redirect/error}   — Uğursuz ödəniş yönləndirmə</li>
+ *   <li>{@code GET  /payment/abb/redirect/success/{orderId}} — Uğurlu ödəniş yönləndirmə (status sync)</li>
+ *   <li>{@code GET  /payment/abb/redirect/error/{orderId}}   — Uğursuz ödəniş yönləndirmə</li>
  * </ul>
  *
  * <h2>Təhlükəsizlik</h2>
@@ -246,8 +246,8 @@ public class AbbPaymentController {
             log.info("[ABB][Callback] Successfully processed for order={}", order);
 
             String targetUrl = callback.isSuccessful()
-                    ? abbIntegrationService.getAbsoluteLocalSuccessRedirectUrl()
-                    : abbIntegrationService.getAbsoluteLocalErrorRedirectUrl();
+                    ? abbIntegrationService.getAbsoluteLocalSuccessRedirectUrl(order)
+                    : abbIntegrationService.getAbsoluteLocalErrorRedirectUrl(order);
 
             log.info("[ABB][Callback] Redirecting (303 SEE_OTHER) to absolute local URL: {}", targetUrl);
             return ResponseEntity.status(HttpStatus.SEE_OTHER)
@@ -257,19 +257,19 @@ public class AbbPaymentController {
         } catch (IllegalArgumentException e) {
             log.warn("[ABB][Callback] Invalid callback data for order={}: {}", order, e.getMessage());
             return ResponseEntity.status(HttpStatus.SEE_OTHER)
-                    .location(URI.create(abbIntegrationService.getAbsoluteLocalErrorRedirectUrl()))
+                    .location(URI.create(abbIntegrationService.getAbsoluteLocalErrorRedirectUrl(order)))
                     .build();
 
         } catch (SecurityException e) {
             log.error("[ABB][Callback] Signature verification failed for order={}", order);
             return ResponseEntity.status(HttpStatus.SEE_OTHER)
-                    .location(URI.create(abbIntegrationService.getAbsoluteLocalErrorRedirectUrl()))
+                    .location(URI.create(abbIntegrationService.getAbsoluteLocalErrorRedirectUrl(order)))
                     .build();
 
         } catch (Exception e) {
             log.error("[ABB][Callback] Unexpected error for order={}", order, e);
             return ResponseEntity.status(HttpStatus.SEE_OTHER)
-                    .location(URI.create(abbIntegrationService.getAbsoluteLocalErrorRedirectUrl()))
+                    .location(URI.create(abbIntegrationService.getAbsoluteLocalErrorRedirectUrl(order)))
                     .build();
         }
     }
@@ -291,8 +291,16 @@ public class AbbPaymentController {
             summary = "ABB uğurlu ödəniş yönləndirmə",
             description = "Azericard ödənişi tamamladıqdan sonra istifadəçini uğur səhifəsinə yönləndirir."
     )
-    @GetMapping("/payment/abb/redirect/success")
-    public ResponseEntity<Void> redirectSuccess() {
+    @GetMapping({"/payment/abb/redirect/success", "/payment/abb/redirect/success/{orderId}"})
+    public ResponseEntity<Void> redirectSuccess(@PathVariable(required = false) String orderId) {
+        if (orderId != null && !orderId.isBlank()) {
+            try {
+                log.info("[ABB][Redirect] Syncing bank status before success redirect orderId={}", orderId);
+                abbIntegrationService.getTransactionStatus(orderId, "1");
+            } catch (Exception e) {
+                log.warn("[ABB][Redirect] Failed to sync status before success redirect orderId={}", orderId, e);
+            }
+        }
         String targetUrl = abbIntegrationService.getSuccessRedirectUrl();
         log.info("[ABB][Redirect] Success redirect to: {}", targetUrl);
         return ResponseEntity.status(HttpStatus.FOUND)
@@ -304,8 +312,15 @@ public class AbbPaymentController {
             summary = "ABB uğursuz ödəniş yönləndirmə",
             description = "Azericard ödənişi rədd etdikdən sonra istifadəçini xəta səhifəsinə yönləndirir."
     )
-    @GetMapping("/payment/abb/redirect/error")
-    public ResponseEntity<Void> redirectError() {
+    @GetMapping({"/payment/abb/redirect/error", "/payment/abb/redirect/error/{orderId}"})
+    public ResponseEntity<Void> redirectError(@PathVariable(required = false) String orderId) {
+        if (orderId != null && !orderId.isBlank()) {
+            try {
+                abbIntegrationService.getTransactionStatus(orderId, "1");
+            } catch (Exception e) {
+                log.warn("[ABB][Redirect] Failed to sync status before error redirect orderId={}", orderId, e);
+            }
+        }
         String targetUrl = abbIntegrationService.getErrorRedirectUrl();
         log.info("[ABB][Redirect] Error redirect to: {}", targetUrl);
         return ResponseEntity.status(HttpStatus.FOUND)
