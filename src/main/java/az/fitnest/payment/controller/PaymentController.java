@@ -36,7 +36,7 @@ public class PaymentController {
     private final SubscriptionPackageGrpcClient subscriptionPackageGrpcClient;
 
     @Operation(summary = "Geri çağırışı emal edin", description = "Epoint-dən ödəniş nəticələrini qəbul edir.")
-    @PostMapping(value = {"/payment/result", "/payment/callback", "/payment/epoint/callback"})
+    @PostMapping(value = {"/payment/result", "/payment/callback", "/payment/epoint/callback", "/epoint/result"})
     public ResponseEntity<String> handleCallback(
             @RequestParam("data") String data,
             @RequestParam("signature") String signature) {
@@ -403,8 +403,14 @@ public class PaymentController {
     }
 
     @Operation(summary = "Callback probe", description = "Epoint-in GET yoxlaması üçün")
-    @GetMapping(value = {"/payment/result", "/payment/callback", "/payment/epoint/callback"})
-    public ResponseEntity<String> handleCallbackGet() {
+    @GetMapping(value = {"/payment/result", "/payment/callback", "/payment/epoint/callback", "/epoint/result"})
+    public ResponseEntity<String> handleCallbackGet(
+            @RequestParam(value = "data", required = false) String data,
+            @RequestParam(value = "signature", required = false) String signature) {
+        if (data != null && !data.isBlank() && signature != null && !signature.isBlank()) {
+            log.info("[Callback] GET callback with data/signature — processing");
+            return handleCallback(data, signature);
+        }
         log.info("[Callback] GET probe received — returning OK");
         return ResponseEntity.ok("OK");
     }

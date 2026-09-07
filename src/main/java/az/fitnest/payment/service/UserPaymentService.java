@@ -221,7 +221,15 @@ public class UserPaymentService {
                 && !"NEW".equals(status)) {
             return payment;
         }
-        String lookupId = payment.getOrderId() != null ? payment.getOrderId() : payment.getTransactionId();
+        String lookupId;
+        boolean isEpoint = payment.getProvider() == null
+                || "EPOINT".equalsIgnoreCase(payment.getProvider())
+                || "WIDGET_PAYMENT".equalsIgnoreCase(payment.getType());
+        if (isEpoint && payment.getTransactionId() != null && !payment.getTransactionId().isBlank()) {
+            lookupId = payment.getTransactionId();
+        } else {
+            lookupId = payment.getOrderId() != null ? payment.getOrderId() : payment.getTransactionId();
+        }
         try {
             boolean isBnpl = "ABB_BNPL".equalsIgnoreCase(payment.getProvider())
                     || (payment.getType() != null && payment.getType().contains("BNPL"));

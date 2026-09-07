@@ -144,7 +144,7 @@ class CoinWalletControllerTest {
         assertNotNull(response.getBody());
         assertEquals(new BigDecimal("320.00"), response.getBody().getCoinBalance());
         assertEquals(new BigDecimal("32.00"), response.getBody().getAznEquivalent());
-        assertEquals(false, response.getBody().getShowWelcomeBonusPopup());
+        assertEquals(false, response.getBody().getWelcomeBonusPopupShown());
         assertNull(response.getBody().getWelcomeBonusAmount());
     }
 

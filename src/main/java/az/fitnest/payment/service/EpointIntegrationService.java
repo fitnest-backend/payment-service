@@ -32,6 +32,7 @@ import az.fitnest.payment.client.epoint.EpointHttpClient;
 import az.fitnest.payment.service.coin.CoinCheckoutHelper;
 import az.fitnest.payment.service.coin.CoinPaymentProcessor;
 import az.fitnest.payment.event.PaymentOutboxService;
+import az.fitnest.payment.util.EpointTransactionIds;
 import az.fitnest.payment.util.PaymentPackageRef;
 
 @Service
@@ -434,20 +435,14 @@ public class EpointIntegrationService {
         }
 
         try {
-            Optional<Payment> optionalPayment = Optional.empty();
-            if (callbackData.orderId() != null && !callbackData.orderId().isBlank()) {
-                optionalPayment = paymentRepository.findByOrderId(callbackData.orderId());
-            }
-            if (optionalPayment.isEmpty() && callbackData.transaction() != null && !callbackData.transaction().isBlank()) {
-                optionalPayment = paymentRepository.findByTransactionIdForUpdate(callbackData.transaction());
-            }
+            Optional<Payment> optionalPayment = findPaymentForEpointCallback(callbackData);
             if (optionalPayment.isPresent()) {
                 Payment payment = optionalPayment.get();
                 if (Boolean.TRUE.equals(payment.getCallbackProcessed())) {
                     log.warn("[Callback] Callback already processed for orderId: {}, transaction: {}. Skipping duplicate.", callbackData.orderId(), callbackData.transaction());
                     return;
                 }
-                if (payment.getAmount() != null && callbackData.amount() != null && !payment.getAmount().equals(callbackData.amount())) {
+                if (amountsMismatch(payment.getAmount(), callbackData.amount())) {
                     log.error("[Callback] Amount mismatch: payment={}, callback={}", payment.getAmount(), callbackData.amount());
                     throw new SecurityException("Amount mismatch");
                 }
@@ -515,15 +510,45 @@ public class EpointIntegrationService {
     }
 
     public EpointResponse getStatus(String id) {
-        Optional<Payment> paymentOpt = paymentRepository.findByOrderId(id)
-                .or(() -> paymentRepository.findByTransactionId(id));
+        Optional<Payment> paymentOpt = findPaymentForEpointStatus(id);
 
-        String queryId = paymentOpt.map(Payment::getTransactionId).orElse(id);
-        if (queryId == null || queryId.isBlank()) {
-            queryId = id;
+        List<String> queryIds = new java.util.ArrayList<>();
+        if (paymentOpt.isPresent()) {
+            queryIds.addAll(EpointTransactionIds.lookupCandidates(paymentOpt.get().getTransactionId(), id));
+        } else {
+            queryIds.addAll(EpointTransactionIds.lookupCandidates(id));
+        }
+        if (queryIds.isEmpty() && id != null && !id.isBlank()) {
+            queryIds.add(id);
         }
 
-        EpointResponse response = epointService.getStatus(queryId);
+        EpointResponse response = null;
+        for (String queryId : queryIds) {
+            if (queryId == null || queryId.isBlank()) {
+                continue;
+            }
+            try {
+                EpointResponse candidate = epointService.getStatus(queryId);
+                if (candidate == null) {
+                    continue;
+                }
+                response = candidate;
+                if (EpointTransactionIds.isDefinitiveStatus(candidate)) {
+                    if (!queryId.equals(paymentOpt.map(Payment::getTransactionId).orElse(id))) {
+                        log.info("[StatusSync] Epoint recognized alternate transaction id {} (requested {})",
+                                queryId, id);
+                    }
+                    break;
+                }
+                log.info("[StatusSync] Epoint get-status for {} returned non-definitive status={}; trying next id",
+                        queryId, candidate.status());
+            } catch (Exception e) {
+                log.warn("[StatusSync] Epoint get-status failed for {}: {}", queryId, e.getMessage());
+            }
+        }
+        if (response == null) {
+            throw new IllegalStateException("Epoint get-status returned no response for id " + id);
+        }
 
         if (paymentOpt.isPresent()) {
             Payment payment = paymentOpt.get();
@@ -611,8 +636,7 @@ public class EpointIntegrationService {
                     }
                     if (!token.isBlank() && token.matches("\\d+")) {
                         try {
-                            String paddedToken = String.format("%010d", Long.parseLong(token));
-                            transactionId = "tw" + paddedToken;
+                            transactionId = EpointTransactionIds.fromWidgetToken(token);
                             log.info("[WidgetUrl] Extracted widget token: {}, formatted transactionId: {}", token, transactionId);
                         } catch (Exception e) {
                             log.warn("[WidgetUrl] Failed to format widget token: {}", token, e);
@@ -684,10 +708,7 @@ public class EpointIntegrationService {
         if (("FAILED".equalsIgnoreCase(newStatus) || "ERROR".equalsIgnoreCase(newStatus) || "SERVER_ERROR".equalsIgnoreCase(newStatus))
                 && ("PENDING".equals(payment.getStatus()) || "PENDING_USER_ACTION".equals(payment.getStatus()) || "PENDING_3DS".equals(payment.getStatus()) || "NEW".equals(payment.getStatus()))) {
 
-            boolean hasAttempt = (response.cardMask() != null && !response.cardMask().isBlank())
-                    || (response.bankTransaction() != null && !response.bankTransaction().isBlank())
-                    || (response.bankResponse() != null && !response.bankResponse().isBlank())
-                    || (response.code() != null && !response.code().isBlank() && !"500".equals(response.code()) && !"ERROR".equalsIgnoreCase(response.code()));
+            boolean hasAttempt = EpointTransactionIds.hasBankAttempt(response);
 
             if (!hasAttempt) {
                 java.time.Instant thirtyMinutesAgo = java.time.Instant.now().minus(30, java.time.temporal.ChronoUnit.MINUTES);
@@ -702,15 +723,28 @@ public class EpointIntegrationService {
         }
 
         payment.setStatus(newStatus);
-        payment.setTransactionId(response.transaction() != null ? response.transaction() : payment.getTransactionId());
-        payment.setBankTransaction(response.bankTransaction());
-        payment.setRrn(response.rrn());
-        payment.setCardMask(CardMaskUtil.toLast4(response.cardMask()));
-        payment.setCardName(response.cardName());
-        payment.setMessage(response.message());
-        payment.setCode(response.code());
-        payment.setBankResponse(response.bankResponse());
-        payment.setOperationCode(response.operationCode());
+        copyIfPresent(response.transaction(), payment::setTransactionId);
+        copyIfPresent(response.bankTransaction(), payment::setBankTransaction);
+        copyIfPresent(response.rrn(), payment::setRrn);
+        if (response.cardMask() != null && !response.cardMask().isBlank()) {
+            payment.setCardMask(CardMaskUtil.toLast4(response.cardMask()));
+        }
+        copyIfPresent(response.cardName(), payment::setCardName);
+        copyIfPresent(response.message(), payment::setMessage);
+        copyIfPresent(response.code(), payment::setCode);
+        copyIfPresent(response.bankResponse(), payment::setBankResponse);
+        copyIfPresent(response.operationCode(), payment::setOperationCode);
+        copyIfPresent(response.cardId(), payment::setCardId);
+        if (response.orderId() != null && !response.orderId().isBlank()
+                && (payment.getOrderId() == null || payment.getOrderId().isBlank())) {
+            payment.setOrderId(response.orderId());
+        }
+    }
+
+    private static void copyIfPresent(String value, java.util.function.Consumer<String> setter) {
+        if (value != null && !value.isBlank()) {
+            setter.accept(value);
+        }
     }
 
     private Payment saveRedirectPayment(EpointResponse response, String orderId, Double amount, String currency, Long userId, String description, Boolean autoPaymentEnabled) {
@@ -907,6 +941,53 @@ public class EpointIntegrationService {
         return "FAILED".equalsIgnoreCase(status)
                 || "ERROR".equalsIgnoreCase(status)
                 || "SERVER_ERROR".equalsIgnoreCase(status);
+    }
+
+    private Optional<Payment> findPaymentForEpointCallback(EpointResponse callbackData) {
+        if (callbackData == null) {
+            return Optional.empty();
+        }
+        if (callbackData.orderId() != null && !callbackData.orderId().isBlank()) {
+            Optional<Payment> byOrder = paymentRepository.findByOrderId(callbackData.orderId());
+            if (byOrder.isPresent()) {
+                return byOrder;
+            }
+        }
+        for (String candidate : EpointTransactionIds.lookupCandidates(callbackData.transaction())) {
+            Optional<Payment> byTransaction = paymentRepository.findByTransactionIdForUpdate(candidate);
+            if (byTransaction.isPresent()) {
+                if (!candidate.equals(callbackData.transaction())) {
+                    log.info("[Callback] Matched payment via alternate transaction id {} (callback transaction={})",
+                            candidate, callbackData.transaction());
+                }
+                return byTransaction;
+            }
+        }
+        return Optional.empty();
+    }
+
+    private Optional<Payment> findPaymentForEpointStatus(String id) {
+        Optional<Payment> paymentOpt = paymentRepository.findByOrderId(id)
+                .or(() -> paymentRepository.findByTransactionId(id));
+        if (paymentOpt.isPresent()) {
+            return paymentOpt;
+        }
+        for (String candidate : EpointTransactionIds.lookupCandidates(id)) {
+            paymentOpt = paymentRepository.findByTransactionId(candidate);
+            if (paymentOpt.isPresent()) {
+                return paymentOpt;
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static boolean amountsMismatch(Double expected, Double actual) {
+        if (expected == null || actual == null) {
+            return false;
+        }
+        java.math.BigDecimal left = java.math.BigDecimal.valueOf(expected).setScale(2, java.math.RoundingMode.HALF_UP);
+        java.math.BigDecimal right = java.math.BigDecimal.valueOf(actual).setScale(2, java.math.RoundingMode.HALF_UP);
+        return left.compareTo(right) != 0;
     }
 
     private String generateIdempotencyKey(String operation, String orderId, Long userId) {
