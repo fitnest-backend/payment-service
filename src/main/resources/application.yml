@@ -190,6 +190,8 @@ abb-bnpl:
   client-id: ${ABB_BNPL_CLIENT_ID:}
   # RSA private key for Private Key JWT (RS256, min 2048-bit). Public key is sent to ABB.
   private-key: ${ABB_BNPL_PRIVATE_KEY:}
+  public-key: ${ABB_BNPL_PUBLIC_KEY:}
+  key-id: ${ABB_BNPL_KEY_ID:fitnest-m2m}
   # Optional JWT aud override; defaults to auth-url
   token-audience: ${ABB_BNPL_TOKEN_AUDIENCE:}
   scope: ${ABB_BNPL_SCOPE:openid}

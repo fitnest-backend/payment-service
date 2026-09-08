@@ -13,10 +13,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.security.KeyFactory;
 import java.security.PrivateKey;
 import java.security.Signature;
-import java.security.spec.PKCS8EncodedKeySpec;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
@@ -116,7 +114,8 @@ public class AbbBnplTokenService {
             long exp = iat + 180; // doc: must expire within 3 minutes
             String jti = UUID.randomUUID().toString();
 
-            String headerJson = "{\"alg\":\"RS256\",\"typ\":\"JWT\"}";
+            String kid = resolveKeyId();
+            String headerJson = "{\"alg\":\"RS256\",\"typ\":\"JWT\",\"kid\":\"" + escapeJson(kid) + "\"}";
             String payloadJson = "{"
                     + "\"iss\":\"" + escapeJson(properties.getClientId()) + "\","
                     + "\"sub\":\"" + escapeJson(properties.getClientId()) + "\","
@@ -130,7 +129,7 @@ public class AbbBnplTokenService {
             String payload = base64Url(payloadJson.getBytes(StandardCharsets.UTF_8));
             String signingInput = header + "." + payload;
 
-            PrivateKey privateKey = loadPrivateKey(properties.getPrivateKey());
+            PrivateKey privateKey = AbbBnplRsaKeys.loadPrivateKey(properties.getPrivateKey());
             Signature signature = Signature.getInstance("SHA256withRSA");
             signature.initSign(privateKey);
             signature.update(signingInput.getBytes(StandardCharsets.US_ASCII));
@@ -145,52 +144,14 @@ public class AbbBnplTokenService {
         }
     }
 
-    private PrivateKey loadPrivateKey(String pemOrBase64) throws Exception {
-        String stripped = pemOrBase64
-                .replaceAll("-----BEGIN [A-Z ]+-----", "")
-                .replaceAll("-----END [A-Z ]+-----", "")
-                .replaceAll("\\s+", "");
-        byte[] keyBytes = Base64.getDecoder().decode(stripped);
-        try {
-            return KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(keyBytes));
-        } catch (Exception pkcs8Fail) {
-            // PKCS#1 → PKCS#8 wrap (same approach as AbbSigner)
-            byte[] pkcs8 = wrapPkcs1ToPkcs8(keyBytes);
-            return KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(pkcs8));
+    private String resolveKeyId() {
+        if (!isBlank(properties.getKeyId())) {
+            return properties.getKeyId().trim();
         }
-    }
-
-    private static byte[] wrapPkcs1ToPkcs8(byte[] pkcs1Bytes) {
-        byte[] algId = new byte[]{
-                0x30, 0x0d,
-                0x06, 0x09,
-                0x2a, (byte) 0x86, 0x48, (byte) 0x86, (byte) 0xf7, 0x0d, 0x01, 0x01, 0x01,
-                0x05, 0x00
-        };
-        byte[] octetString = encodeAsn1Length(0x04, pkcs1Bytes);
-        byte[] inner = new byte[3 + algId.length + octetString.length];
-        inner[0] = 0x02;
-        inner[1] = 0x01;
-        inner[2] = 0x00;
-        System.arraycopy(algId, 0, inner, 3, algId.length);
-        System.arraycopy(octetString, 0, inner, 3 + algId.length, octetString.length);
-        return encodeAsn1Length(0x30, inner);
-    }
-
-    private static byte[] encodeAsn1Length(int tag, byte[] content) {
-        int length = content.length;
-        byte[] header;
-        if (length < 128) {
-            header = new byte[]{(byte) tag, (byte) length};
-        } else if (length < 256) {
-            header = new byte[]{(byte) tag, (byte) 0x81, (byte) length};
-        } else {
-            header = new byte[]{(byte) tag, (byte) 0x82, (byte) (length >> 8), (byte) (length & 0xff)};
+        if (!isBlank(properties.getClientId())) {
+            return properties.getClientId().trim();
         }
-        byte[] result = new byte[header.length + content.length];
-        System.arraycopy(header, 0, result, 0, header.length);
-        System.arraycopy(content, 0, result, header.length, content.length);
-        return result;
+        return "fitnest-m2m";
     }
 
     private static String base64Url(byte[] data) {

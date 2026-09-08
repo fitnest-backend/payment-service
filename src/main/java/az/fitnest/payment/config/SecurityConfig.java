@@ -41,6 +41,7 @@ public class SecurityConfig {
                 )
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/v1/internal/**").authenticated()
+                        .requestMatchers("/.well-known/jwks.json", "/payment/.well-known/jwks.json").permitAll()
                         .requestMatchers("/epoint/result").permitAll()
                         .requestMatchers("/payment/callback").permitAll()
                         .requestMatchers("/payment/epoint/callback").permitAll()
