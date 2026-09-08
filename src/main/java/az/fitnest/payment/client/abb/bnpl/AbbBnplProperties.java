@@ -40,6 +40,16 @@ public class AbbBnplProperties {
     private String privateKey;
 
     /**
+     * Optional X.509 public key PEM. Derived from the private key when blank.
+     */
+    private String publicKey;
+
+    /**
+     * JWK {@code kid} published in JWKS and set on client_assertion. Defaults to clientId.
+     */
+    private String keyId;
+
+    /**
      * Optional audience override for client_assertion JWT.
      * Defaults to {@link #authUrl} when blank.
      */
